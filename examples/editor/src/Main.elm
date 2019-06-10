@@ -11,6 +11,8 @@ import Html.Keyed
 import Html.Lazy
 import Http
 import Json.Decode as Decode
+import Keyboard.Event exposing (KeyboardEvent, decodeKey, decodeKeyboardEvent)
+import Keyboard.Key exposing (Key(..))
 import Mark
 import Mark.Edit
 import Mark.Error
@@ -82,7 +84,7 @@ type Msg
     = GotSrc (Result Http.Error String)
     | EditorMsgError String
     | EditorSent Ports.Incoming
-    | KeyPressed Key
+    | HandleKeyboardEvent KeyboardEvent
     | SelectTo ( Float, Float )
     | StopSelection
     | ClearSelection
@@ -96,20 +98,15 @@ type Style
     | Normal
 
 
-type Key
-    = Character Char
-    | Control String
-    | Enter
-    | Space
-    | Delete
-    | Arrow Direction
 
-
-type Direction
-    = Up
-    | Right
-    | Down
-    | Left
+--type Key
+--= Character Char
+--| Control String
+--| Enter
+--| Space
+--| Shift
+--| Delete
+--| Arrow Direction
 
 
 {-| We dont use Browser events because we need to prevent defaults.
@@ -119,8 +116,7 @@ Specifically for spacebar, but likely for others as well.
 -}
 editEvents =
     [ Attr.tabindex 1
-    , Events.preventDefaultOn "keypress" (Decode.map (\key -> ( KeyPressed key, True )) keyDecoder)
-    , Events.preventDefaultOn "keydown" (Decode.map (\key -> ( KeyPressed key, True )) controlDecoder)
+    , Events.on "keydown" (Decode.map HandleKeyboardEvent decodeKeyboardEvent)
     , Events.on "mousedown" (Decode.map SelectTo decodeCoords)
     ]
 
@@ -129,56 +125,6 @@ decodeCoords =
     Decode.map2 Tuple.pair
         (Decode.field "pageX" Decode.float)
         (Decode.field "pageY" Decode.float)
-
-
-controlDecoder : Decode.Decoder Key
-controlDecoder =
-    Decode.field "key" Decode.string
-        |> Decode.andThen
-            (\str ->
-                case str of
-                    "Backspace" ->
-                        Decode.succeed Delete
-
-                    "ArrowDown" ->
-                        Decode.succeed (Arrow Down)
-
-                    "ArrowUp" ->
-                        Decode.succeed (Arrow Up)
-
-                    "ArrowRight" ->
-                        Decode.succeed (Arrow Right)
-
-                    "ArrowLeft" ->
-                        Decode.succeed (Arrow Left)
-
-                    _ ->
-                        Decode.fail "Unknown"
-            )
-
-
-keyDecoder : Decode.Decoder Key
-keyDecoder =
-    Decode.map toKey (Decode.field "key" Decode.string)
-
-
-toKey : String -> Key
-toKey string =
-    case String.uncons string of
-        Just ( char, "" ) ->
-            Character char
-
-        _ ->
-            -- https://developer.mozilla.org/en-US/docs/Web/API/KeyboardEvent/key/Key_Values
-            case string of
-                "Enter" ->
-                    Enter
-
-                " " ->
-                    Space
-
-                _ ->
-                    Control string
 
 
 syncCursor layout cursor =
@@ -318,7 +264,7 @@ update msg model =
                     -- no parsed document or cursor, then edits dont make sense
                     ( model, Cmd.none )
 
-        KeyPressed key ->
+        HandleKeyboardEvent key ->
             case ( model.parsed, model.cursor, model.characterLayout ) of
                 ( Just parsed, Just cursor, Just charLayout ) ->
                     case updateDocument charLayout parsed cursor key of
@@ -382,34 +328,34 @@ updateDocument :
     Selection.CharLayout
     -> Mark.Parsed
     -> Cursor
-    -> Key
+    -> KeyboardEvent
     -> Result (List Mark.Error.Error) ( Cursor, Mark.Parsed )
-updateDocument charLayout parsed cursor key =
-    case key of
-        Character char ->
-            case cursor of
-                Caret caret ->
-                    -- TODO: what if offset is 0?
-                    Mark.Edit.update document
-                        (Mark.Edit.insertText
-                            caret.id
-                            caret.offset
-                            [ Mark.New.unstyled (String.fromChar char) ]
-                        )
-                        parsed
-                        |> Result.map (Tuple.pair (Caret (Selection.move 1 caret)))
-
-                Range start middle end ->
-                    Mark.Edit.update document
-                        (Mark.Edit.insertText
-                            start.id
-                            start.offset
-                            [ Mark.New.unstyled (String.fromChar char) ]
-                        )
-                        parsed
-                        |> Result.map (Tuple.pair (Caret (Selection.move 1 start)))
-
-        Delete ->
+updateDocument charLayout parsed cursor event =
+    case event.keyCode of
+        --        Character char ->
+        --            case cursor of
+        --                Caret caret ->
+        --                    -- TODO: what if offset is 0?
+        --                    Mark.Edit.update document
+        --                        (Mark.Edit.insertText
+        --                            caret.id
+        --                            caret.offset
+        --                            [ Mark.New.unstyled (String.fromChar char) ]
+        --                        )
+        --                        parsed
+        --                        |> Result.map (Tuple.pair (Caret (Selection.move 1 caret)))
+        --
+        --                Range start middle end ->
+        --                    Mark.Edit.update document
+        --                        (Mark.Edit.insertText
+        --                            start.id
+        --                            start.offset
+        --                            [ Mark.New.unstyled (String.fromChar char) ]
+        --                        )
+        --                        parsed
+        --                        |> Result.map (Tuple.pair (Caret (Selection.move 1 start)))
+        --
+        Backspace ->
             case cursor of
                 Caret caret ->
                     -- TODO: what if offset is 0?
@@ -440,52 +386,149 @@ updateDocument charLayout parsed cursor key =
                         parsed
                         |> Result.map (Tuple.pair newCursor)
 
-        Arrow dir ->
-            let
-                collapsed =
-                    case cursor of
-                        Caret caret ->
-                            caret
+        Up ->
+            if event.shiftKey then
+                -- Alter selection
+                case cursor of
+                    Caret caret ->
+                        Ok ( Range caret [] (Selection.move 1 caret), parsed )
 
-                        Range start _ _ ->
-                            start
-            in
-            case dir of
-                Up ->
-                    Ok
-                        ( Caret (Selection.moveUp charLayout collapsed)
-                        , parsed
-                        )
+                    Range start middle end ->
+                        Ok ( Range start (middle ++ [ end ]) (Selection.move 1 end), parsed )
 
-                Down ->
-                    Ok
-                        ( Caret (Selection.moveDown charLayout collapsed)
-                        , parsed
-                        )
+            else
+                --Move cursor
+                let
+                    collapsed =
+                        case cursor of
+                            Caret caret ->
+                                caret
 
-                Left ->
-                    Ok
-                        ( Caret (Selection.move -1 collapsed)
-                        , parsed
-                        )
+                            Range start _ _ ->
+                                start
+                in
+                Ok ( Caret (Selection.moveUp charLayout collapsed), parsed )
 
-                Right ->
-                    Ok
-                        ( Caret (Selection.move 1 collapsed)
-                        , parsed
-                        )
+        Right ->
+            if event.shiftKey then
+                -- Alter selection
+                case cursor of
+                    Caret caret ->
+                        Ok ( Range caret [] (Selection.move 1 caret), parsed )
 
-        Control ctrl ->
-            -- These are as yet uncaptured control characters.
-            -- We still capture them here incase we want to extend in the future.
-            -- Here's what's available:
-            -- https://developer.mozilla.org/en-US/docs/Web/API/KeyboardEvent/key/Key_Values
+                    Range start middle end ->
+                        Ok ( Range start (middle ++ [ end ]) (Selection.move 1 end), parsed )
+
+            else
+                --Move cursor
+                let
+                    collapsed =
+                        case cursor of
+                            Caret caret ->
+                                caret
+
+                            Range _ _ end ->
+                                end
+                in
+                Ok ( Caret (Selection.move 1 collapsed), parsed )
+
+        Left ->
+            if event.shiftKey then
+                -- Alter selection
+                case cursor of
+                    Caret caret ->
+                        Ok ( Range (Selection.move -1 caret) [] caret, parsed )
+
+                    Range start middle end ->
+                        let
+                            rangeWidth =
+                                List.length middle
+
+                            _ =
+                                Debug.log "start" start
+
+                            _ =
+                                Debug.log "middle" middle
+
+                            _ =
+                                Debug.log "end" end
+
+                            _ =
+                                Debug.log "w" rangeWidth
+
+                            _ =
+                                Debug.log "side" (Selection.closestSide start cursor)
+                        in
+                        if rangeWidth > 0 then
+                            Ok ( Range start (List.take (rangeWidth - 1) middle) (Selection.move -1 end), parsed )
+
+                        else
+                            Ok ( Caret start, parsed )
+
+            else
+                -- Move cursor
+                let
+                    collapsed =
+                        case cursor of
+                            Caret caret ->
+                                caret
+
+                            Range start _ _ ->
+                                start
+                in
+                Ok ( Caret (Selection.move -1 collapsed), parsed )
+
+        --        Arrow dir ->
+        --            let
+        --                collapsed =
+        --                    case cursor of
+        --                        Caret caret ->
+        --                            caret
+        --
+        --                        Range start _ _ ->
+        --                            start
+        --            in
+        --            case dir of
+        --                Up ->
+        --                    Ok
+        --                        ( Caret (Selection.moveUp charLayout collapsed)
+        --                        , parsed
+        --                        )
+        --
+        --                Down ->
+        --                    Ok
+        --                        ( Caret (Selection.moveDown charLayout collapsed)
+        --                        , parsed
+        --                        )
+        --
+        --                Left ->
+        --                    Ok
+        --                        ( Caret (Selection.move -1 collapsed)
+        --                        , parsed
+        --                        )
+        --
+        --                Right ->
+        --                    Ok
+        --                        ( Caret (Selection.move 1 collapsed)
+        --                        , parsed
+        --                        )
+        --
+        --        Control ctrl ->
+        --            -- These are as yet uncaptured control characters.
+        --            -- We still capture them here incase we want to extend in the future.
+        --            -- Here's what's available:
+        --            -- https://developer.mozilla.org/en-US/docs/Web/API/KeyboardEvent/key/Key_Values
+        --            Err []
+        Shift _ ->
             Err []
 
         Enter ->
             Err []
 
-        Space ->
+        Spacebar ->
+            Err []
+
+        _ ->
             Err []
 
 

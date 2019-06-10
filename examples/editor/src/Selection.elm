@@ -4,6 +4,7 @@ module Selection exposing
     , CharLayout
     , Offset
     , Selection(..)
+    , closestSide
     , decode
     , move
     , moveDown
