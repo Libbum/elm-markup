@@ -4,6 +4,7 @@ module Main exposing (document, main)
 
 import Browser
 import Browser.Events
+import Color
 import Html exposing (Html)
 import Html.Attributes as Attr
 import Html.Events as Events
@@ -11,6 +12,7 @@ import Html.Keyed
 import Html.Lazy
 import Http
 import Json.Decode as Decode
+import List.Extra exposing (groupWhile)
 import Mark
 import Mark.Edit
 import Mark.Error
@@ -18,6 +20,9 @@ import Mark.New
 import Ports
 import Selection
 import Time
+import TypedSvg exposing (polygon, svg)
+import TypedSvg.Attributes exposing (fill, points, stroke, strokeWidth, viewBox)
+import TypedSvg.Types exposing (Fill(..), px)
 
 
 main =
@@ -520,6 +525,48 @@ viewDocument parsed =
                         (viewErrors errors)
 
 
+getPoints : Cursor -> List ( Float, Float )
+getPoints selection =
+    case selection of
+        Range start middle end ->
+            if start.box.y == end.box.y then
+                -- Same line
+                [ ( 0, 0 ), ( 0, start.box.height ), ( (end.box.x + end.box.width) - start.box.x, (end.box.y + end.box.height) - start.box.y ), ( (end.box.x + end.box.width) - start.box.x, end.box.y - start.box.y ) ]
+
+            else
+                let
+                    lines =
+                        getLines middle
+
+                    -- Multiline
+                in
+                [ ( 0, 0 ), ( 0, (end.box.y + end.box.height) - start.box.y ), ( (end.box.x + end.box.width) - start.box.x, (end.box.y + end.box.height) - start.box.y ), ( (end.box.x + end.box.width) - start.box.x, end.box.y - start.box.y ) ]
+
+        _ ->
+            []
+
+
+getLines : List Selection.CharBox -> List Selection.CharBox
+getLines middle =
+    let
+        test =
+            -- Gives us [(head, [tail]), (head, [tail])] of each set
+            List.Extra.gatherEqualsBy (\c -> c.box.y) middle
+                |> List.map (\set -> Tuple.first set :: Tuple.second set)
+
+        width =
+            List.map (\kk -> List.map .box kk |> List.map .width |> List.foldl (+) 0) test
+
+        _ =
+            Debug.log "width" width
+    in
+    []
+
+
+
+--TODO: We need to change middle, to give a height, total width, starting x,y for each line
+
+
 viewCursor cursor =
     case cursor of
         Caret curs ->
@@ -535,6 +582,19 @@ viewCursor cursor =
                     -- *note* middle is in reversed order
                     (viewHighlightFromBoxes middle)
                 , viewCharBoxRight end.box
+                , svg
+                    [ Attr.style "position" "absolute"
+                    , Attr.style "left" (String.fromInt (floor start.box.x) ++ "px")
+                    , Attr.style "top" (String.fromInt (floor start.box.y) ++ "px")
+                    ]
+                    [ polygon
+                        [ points (getPoints cursor)
+                        , fill <| Fill (Color.rgba 0 0 0 0.5)
+                        , strokeWidth (px 2)
+                        , stroke <| Color.rgba 90 60 60 0.5
+                        ]
+                        []
+                    ]
                 ]
 
 
